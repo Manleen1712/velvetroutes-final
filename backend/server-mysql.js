@@ -643,6 +643,138 @@ app.post('/api/confirm-payment', authenticateToken, async (req, res) => {
 });
 
 // ============================================
+// SHARING & COLLABORATION
+// ============================================
+
+// Create shareable trip link
+app.post('/api/trips/share', authenticateToken, async (req, res) => {
+  try {
+    const { tripData } = req.body;
+    const userId = req.user.id;
+    
+    // Generate unique share ID
+    const shareId = `trip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    const connection = await pool.getConnection();
+    await connection.execute(
+      `CREATE TABLE IF NOT EXISTS shared_trips (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id INT NOT NULL,
+        trip_data JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )`
+    );
+    
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30); // 30 days expiry
+    
+    await connection.execute(
+      'INSERT INTO shared_trips (id, user_id, trip_data, expires_at) VALUES (?, ?, ?, ?)',
+      [shareId, userId, JSON.stringify(tripData), expiresAt]
+    );
+    
+    connection.release();
+    
+    res.json({
+      success: true,
+      shareId: shareId,
+      shareLink: `${req.protocol}://${req.get('host')}/pages/itinerary-planner.html?share=${shareId}`
+    });
+  } catch (error) {
+    console.error('Share trip error:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Get shared trip
+app.get('/api/trips/share/:shareId', async (req, res) => {
+  try {
+    const { shareId } = req.params;
+    const connection = await pool.getConnection();
+    
+    const [rows] = await connection.execute(
+      'SELECT trip_data FROM shared_trips WHERE id = ? AND (expires_at IS NULL OR expires_at > NOW())',
+      [shareId]
+    );
+    
+    connection.release();
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Trip not found or expired' });
+    }
+    
+    res.json({
+      success: true,
+      tripData: JSON.parse(rows[0].trip_data)
+    });
+  } catch (error) {
+    console.error('Get shared trip error:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Add comment to shared trip
+app.post('/api/trips/share/:shareId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { shareId } = req.params;
+    const { comment } = req.body;
+    const userId = req.user.id;
+    
+    const connection = await pool.getConnection();
+    
+    await connection.execute(
+      `CREATE TABLE IF NOT EXISTS trip_comments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        share_id VARCHAR(255) NOT NULL,
+        user_id INT NOT NULL,
+        comment TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (share_id) REFERENCES shared_trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )`
+    );
+    
+    await connection.execute(
+      'INSERT INTO trip_comments (share_id, user_id, comment) VALUES (?, ?, ?)',
+      [shareId, userId, comment]
+    );
+    
+    connection.release();
+    
+    res.json({ success: true, message: 'Comment added successfully' });
+  } catch (error) {
+    console.error('Add comment error:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Get comments for shared trip
+app.get('/api/trips/share/:shareId/comments', async (req, res) => {
+  try {
+    const { shareId } = req.params;
+    const connection = await pool.getConnection();
+    
+    const [rows] = await connection.execute(
+      `SELECT tc.comment, tc.created_at, u.name as user_name 
+       FROM trip_comments tc 
+       JOIN users u ON tc.user_id = u.id 
+       WHERE tc.share_id = ? 
+       ORDER BY tc.created_at DESC`,
+      [shareId]
+    );
+    
+    connection.release();
+    
+    res.json({ success: true, comments: rows });
+  } catch (error) {
+    console.error('Get comments error:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// ============================================
 // HEALTH CHECK
 // ============================================
 
