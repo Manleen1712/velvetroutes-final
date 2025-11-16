@@ -194,7 +194,7 @@ npm run test         # Run tests
 For questions or issues:
 1. Check the documentation in `/docs/`
 2. Review the setup guides
-3. Check the API documentation
+3. Check the API documentation.
 
 ---
 
